@@ -1,0 +1,54 @@
+Note: Google Test filter = PIMBenchFixture.gemv
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PIMBenchFixture
+[ RUN      ] PIMBenchFixture.gemv
+>>Performance Test
+  GEMV (PIM disabled)
+  Weight data dimension : 2048x256
+  Input data dimension : 256
+  Output data dimension : 2048
+사이즈들
+ 인풋: 512
+ 아웃풋: 4096
+ weight: 1048576
+
+> Test Results 
+> Cycle : 1096
+
+  GEMV (PIM enabled)
+  Weight data dimension : 2048x256
+  Input data dimension : 256
+  Output data dimension : 2048
+num_output_tiles: 1
+(double)w_data->bShape[1]: 16
+num_input_tiles: 2
+num_jump_of_even_bank: 7 num_jump_of_odd_bank: 7
+pim kernel :gemv 0 7 7
+pim_chans_: 64 pim_ranks_: 1
+=========computeGEMV 트리거됨=========
+input 타일 번호: 0
+output 타일 번호: 0
+0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 =========computeGEMV 트리거됨=========
+input 타일 번호: 1
+output 타일 번호: 0
+0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 > Test Results 
+> Cycle : 1138
+
+src/tests/PIMBenchTestCases.h:318: Failure
+Value of: (float)non_pim_cycle_ / pim_cycle_ > expected_perf_gain
+  Actual: false
+Expected: true
+0.96309316158294678
+
+> Speed-up : 0.963093
+[  FAILED  ] PIMBenchFixture.gemv (1497 ms)
+[----------] 1 test from PIMBenchFixture (1497 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1497 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] PIMBenchFixture.gemv
+
+ 1 FAILED TEST
