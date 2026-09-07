@@ -96,7 +96,7 @@ class PIMKernel
     void executeEltwise(int dim, pimBankType bank_types, KernelType ktype, int input0_row,
                         int result_row, int input1_row = 0);
     void computeGemv(NumpyBurstType* data, int num_input_tiles, int num_output_tile, int input_tile,
-                     int output_tile, int batch_idx, pimBankType bank_types);
+                     int output_tile, int batch_idx, pimBankType bank_types, int num_groups = 1);
     void computeAddOrMul(int numTile, int input0Row, int resultRow, int input1Row);
     void computeRelu(int numTile, int input0Row, int resultRow);
     // void computeBn(int numTile, int input0Row, int resultRow);

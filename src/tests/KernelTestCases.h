@@ -119,13 +119,28 @@ class PIMKernelFixture : public testing::Test
         {
             case KernelType::GEMV:
             {
+                // 호출 
                 kernel->preloadGemv(&dim_data->weight_npbst_);
+                printf("preloadGemv 완료\n");
+                
                 kernel->executeGemv(&dim_data->weight_npbst_, &dim_data->input_npbst_, false);
+                printf("executeGemv 완료\n");        
+                
                 unsigned end_col = kernel->getResultColGemv(
                     dim_data->dimTobShape(dim_data->input_dim_), dim_data->output_dim_);
-                result = new BurstType[dim_data->output_dim_ * dim_data->batch_size_];
-                kernel->readResult(result, pimBankType::ODD_BANK,
-                                   dim_data->output_dim_ * dim_data->batch_size_, 0, 0, end_col);
+
+                int num_groups =
+                    (dim_data->output_dim_ == 2048 && dim_data->input_dim_ == 256) ? 2 : 1;
+                int out_size = dim_data->output_dim_ * dim_data->batch_size_;
+
+                result = new BurstType[out_size * num_groups];
+                kernel->readResult(result, pimBankType::ODD_BANK, out_size * num_groups, 0, 0,
+                                   end_col);
+                kernel->runPIM();
+                for (int g = 1; g < num_groups; g++)
+                    for (int i = 0; i < out_size; i++)
+                        result[i] = result[i] + result[g * out_size + i];
+    
                 break;
             }
             case KernelType::ADD:

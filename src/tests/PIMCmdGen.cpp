@@ -11,13 +11,15 @@
  **************************************************************************************************/
 
 #include "tests/PIMCmdGen.h"
+#include <iostream>
+#include <string>
 
 #include <memory>
-
 vector<PIMCmd> PIMCmdGen::getPIMCmds(KernelType ktype, int num_jump_to_be_taken,
                                      int num_jump_to_be_taken_odd_bank,
                                      int num_jump_to_be_taken_even_bank)
 {
+    string str;
     unique_ptr<IPIMCmd> pim_kernel = nullptr;
     switch (ktype)
     {
@@ -28,22 +30,30 @@ vector<PIMCmd> PIMCmdGen::getPIMCmds(KernelType ktype, int num_jump_to_be_taken,
         */
         case KernelType::RELU:
             pim_kernel = make_unique<ActPIMKernel>(ktype);
+            str = "relu";
             break;
         case KernelType::MUL:
             pim_kernel = make_unique<EltwisePIMKernel>(ktype);
+            str = "mul";
             break;
         case KernelType::ADD:
             pim_kernel = make_unique<EltwisePIMKernel>(ktype);
+            str = "add";
             break;
         case KernelType::GEMV:
             pim_kernel = make_unique<GemvPIMKernel>(ktype);
+            str = "gemv";
             break;
         case KernelType::GEMVTREE:
             pim_kernel = make_unique<GemvPIMKernel>(ktype);
+            str = "gemvtree";
             break;
         default:
             throw invalid_argument("Invalid kernel type");
     }
-    return pim_kernel->generateKernel(num_jump_to_be_taken, num_jump_to_be_taken_odd_bank,
-                                      num_jump_to_be_taken_even_bank);
-}
+    std::cout << "pim kernel :" << str << " "<< num_jump_to_be_taken<< " " <<num_jump_to_be_taken_odd_bank<< " " <<num_jump_to_be_taken_even_bank << std::endl;
+
+    return pim_kernel->generateKernel(num_jump_to_be_taken, num_jump_to_be_taken_odd_bank, 
+                                    num_jump_to_be_taken_even_bank);
+
+                                }

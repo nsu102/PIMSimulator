@@ -115,16 +115,26 @@ class GemvPIMKernel : public IPIMCmd
         vector<PIMCmd> pim_cmds;
         if (kernelType == KernelType::GEMV)
         {
-            vector<PIMCmd> tmp_cmds{
-                PIMCmd(PIMCmdType::MAC, PIMOpdType::GRF_B, PIMOpdType::GRF_A, PIMOpdType::EVEN_BANK,
-                       1, 0, 0, 0),
-                PIMCmd(PIMCmdType::JUMP, num_jump_to_be_taken_even_bank, 2),
-                PIMCmd(PIMCmdType::MAC, PIMOpdType::GRF_B, PIMOpdType::GRF_A, PIMOpdType::ODD_BANK,
-                       1, 0, 0, 0),
-                PIMCmd(PIMCmdType::JUMP, num_jump_to_be_taken_odd_bank, 2),
-                PIMCmd(PIMCmdType::NOP, 7),
-            };
-            pim_cmds.assign(tmp_cmds.begin(), tmp_cmds.end());
+            if (num_jump_to_be_taken_odd_bank < 0){
+                vector<PIMCmd> tmp_cmds{
+                    PIMCmd(PIMCmdType::MAC, PIMOpdType::GRF_B, PIMOpdType::GRF_A, PIMOpdType::EVEN_BANK, 
+                        1, 0, 0, 0),
+                    PIMCmd(PIMCmdType::JUMP, num_jump_to_be_taken_even_bank, 2),
+                    PIMCmd(PIMCmdType::NOP, 7),
+                };
+                pim_cmds.assign(tmp_cmds.begin(), tmp_cmds.end());
+            }else {
+                vector<PIMCmd> tmp_cmds{
+                    PIMCmd(PIMCmdType::MAC, PIMOpdType::GRF_B, PIMOpdType::GRF_A, PIMOpdType::EVEN_BANK,
+                        1, 0, 0, 0),
+                    PIMCmd(PIMCmdType::JUMP, num_jump_to_be_taken_even_bank, 2),
+                    PIMCmd(PIMCmdType::MAC, PIMOpdType::GRF_B, PIMOpdType::GRF_A, PIMOpdType::ODD_BANK,
+                            1, 0, 0, 0),
+                    PIMCmd(PIMCmdType::JUMP, num_jump_to_be_taken_odd_bank, 2),
+                    PIMCmd(PIMCmdType::NOP, 7),
+                    };
+                pim_cmds.assign(tmp_cmds.begin(), tmp_cmds.end());    
+                }
         }
         else if (kernelType == KernelType::GEMVTREE)
         {

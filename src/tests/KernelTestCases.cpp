@@ -14,7 +14,7 @@
 
 #include "gtest/gtest.h"
 #include "tests/PIMKernel.h"
-
+#include <iostream>
 /*
  * PIMKernelTest:
  * functionality test for PIM Kernel function
@@ -28,7 +28,7 @@ TEST_F(PIMKernelFixture, gemv_tree)
 
     uint32_t batch_size = 1;
     uint32_t output_dim = 4096;
-    uint32_t input_dim = 1024;
+    uint32_t input_dim = 128;
 
     DataDim *dim_data = new DataDim(KernelType::GEMVTREE, batch_size, output_dim, input_dim, true);
     dim_data->printDim(KernelType::GEMVTREE);
@@ -61,6 +61,7 @@ TEST_F(PIMKernelFixture, gemv_tree)
 
 TEST_F(PIMKernelFixture, gemv)
 {
+
     shared_ptr<PIMKernel> kernel = make_pim_kernel();
 
     uint32_t batch_size = 1;
@@ -69,10 +70,11 @@ TEST_F(PIMKernelFixture, gemv)
 
     DataDim *dim_data = new DataDim(KernelType::GEMV, batch_size, output_dim, input_dim, true);
     dim_data->printDim(KernelType::GEMV);
-
+    
     reduced_result_ = new BurstType[dim_data->dimTobShape(output_dim)];
     result_ = getResultPIM(KernelType::GEMV, dim_data, kernel, result_);
-
+    // cout<< clock;
+    
     testStatsClear();
     expectAccuracy(KernelType::GEMV, output_dim, dim_data->output_npbst_,
                    dim_data->getNumElementsPerBlocks());

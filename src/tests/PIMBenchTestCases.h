@@ -12,7 +12,7 @@
 
 #ifndef __PIM_BENCH_TEST_CASE_H__
 #define __PIM_BENCH_TEST_CASE_H__
-
+#include <stdio.h>
 #include <memory>
 #include <string>
 
@@ -60,12 +60,16 @@ class PIMBenchTestCase
     {
         unsigned basic_stride =
             (getConfigParam(UINT, "JEDEC_DATA_BUS_BITS") * getConfigParam(UINT, "BL") / 8);
+
+        // JEDEC = 64, BL = 4 임. JEDEC는 한 전송 당 가능한 비트 수이고, 4번 곱하는건 한 번 했을 때 보내는 개수야.
+        // 곱하는 이유는 64비트씩 하고 4개 버스트 해주니까 이게 1 cycle인거고, 8은 비트를 바이트로 환산한거야.
+        // printf("\n params JEDEC_, BL %d, %d\n",getConfigParam(UINT, "JEDEC_DATA_BUS_BITS"), getConfigParam(UINT, "BL"));
         BurstType null_bst;
         uint64_t addr;
 
         for (addr = starting_addr; addr < starting_addr + data_size_in_bytes; addr += basic_stride)
         {
-            mem_->addTransaction(is_write, addr, &null_bst);
+            mem_->addTransaction(is_write, addr, &null_bst); // 신경 안씀 얘네는
         }
         return addr;
     }
@@ -129,21 +133,46 @@ class GemvPIMBenchTest : public PIMBenchTestCase
         if (is_pim_ == true)
         {
             kernel_->executeGemv(&dim_data_->weight_npbst_, &dim_data_->input_npbst_, false);
+            cycle = kernel_->getCycle();
+            // printf("==========cycle1========\n%ld\n", cycle);
             kernel_->runPIM();
             cycle = kernel_->getCycle();
+            // printf("==========cycle2========\n%ld\n", cycle);
+            // ==========cycle1========
+            // 0
+            // ==========cycle2========
+            // 1138
         }
         else
         {
+            // printf("\nhello pim\n\n");
             uint32_t input_data_size_in_byte =
-                dim_data_->getDataSize(dim_data_->input_dim_, dim_data_->batch_size_);
+                dim_data_->getDataSize(dim_data_->input_dim_, dim_data_->batch_size_);    
             uint32_t output_data_size_in_byte =
                 dim_data_->getDataSize(dim_data_->output_dim_, dim_data_->batch_size_);
             uint32_t weight_data_size_in_byte =
                 dim_data_->getDataSize(dim_data_->output_dim_, dim_data_->input_dim_);
+            
+            printf("\n사이즈들\n 인풋: %d\n 아웃풋: %d\n weight: %d\n\n", input_data_size_in_byte, output_data_size_in_byte, weight_data_size_in_byte);
+                        
+        
+            // printf("\n\ninput starting : %ld\nweight_data_size_in_byte: %d\n\n그러니까 0부터 저만큼 이동했고, 다음 스타팅 주소는\n\n", starting_addr, weight_data_size_in_byte);
             starting_addr = genMemTraffic(mem_, false, weight_data_size_in_byte, starting_addr);
+            
+            // printf("next input starting : %ld\nweight_data_size_in_byte: %d\n\n", starting_addr, weight_data_size_in_byte);
+            
+            // run(mem_, &cycle);
+            // printf("%ld", cycle);
+            // 여기에 찍어보니 0이 나옴. 아직 안 돌렸으니까
+            // run(mem_, &cycle); -> 여기서도 이걸 돌리면 최종 사이클이 2549가 뜨는데, 정상적으로 하는건 2512가 떠야함
+            
             starting_addr = genMemTraffic(mem_, false, input_data_size_in_byte, starting_addr);
+            // printf("input starting : %ld\ninput_data_size_in_byte: %d\n", starting_addr, input_data_size_in_byte);
+            
             run(mem_, &cycle);
+            // printf("cycle: %ld\n", cycle);
             genMemTraffic(mem_, true, output_data_size_in_byte, starting_addr);  // result-vec
+            // printf("%ld", cycle); <- + 40 된거고 이게 최종이다.
             run(mem_, &cycle);
         }
         return cycle;
@@ -215,7 +244,8 @@ class ActPIMBenchTest : public PIMBenchTestCase
         if (is_pim_ == true)
         {
             kernel_->executeEltwise(dim_data_->output_npbst_.getTotalDim(), pimBankType::ALL_BANK,
-                                    KernelType::RELU, input_row0_, result_row_, 0);
+                                    KernelType::RELU, input_row0_, result_row_, 0); // 왜 RELU지?
+                            
             kernel_->runPIM();
             cycle = kernel_->getCycle();
         }

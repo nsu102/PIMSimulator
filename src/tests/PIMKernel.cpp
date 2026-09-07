@@ -1,3 +1,4 @@
+#include <iostream>
 /***************************************************************************************************
  * Copyright (C) 2021 Samsung Electronics Co. LTD
  *
@@ -14,17 +15,19 @@
 
 #include <iomanip>
 #include <string>
-
+#include <iostream>
+#include <sstream>
 #include "AddressMapping.h"
 #include "tests/PIMCmdGen.h"
+#define MIN(a,b) (((a) < (b)) ? (a) : (b))
 
 void PIMKernel::runPIM()
 {
-    while (mem_->hasPendingTransactions())
-    {
+    while (mem_->hasPendingTransactions()){
         cycle_++;
         mem_->update();
     }
+    // cout<<"진짜 끝"<<endl;
 }
 
 uint64_t PIMKernel::getCycle()
@@ -35,6 +38,7 @@ uint64_t PIMKernel::getCycle()
 void PIMKernel::parkIn()
 {
     addBarrier();
+    cout<< "pim_chans_: "<< pim_chans_.size()<< " pim_ranks_: "<< pim_ranks_.size()<< endl;
     for (int& ch_idx : pim_chans_)
     {
         for (int& ra_idx : pim_ranks_)
@@ -54,6 +58,22 @@ void PIMKernel::parkIn()
                         &null_bst_);
                 }
             }
+
+            // for (int gidx = 0; gidx < num_grfA_; gidx++){
+
+            //     string str = "WRIO_TO_GRF_";
+            //     uint64_t addr =
+            //         pim_addr_mgr_->addrGen(ch_idx, ra_idx, 0, 1, pim_reg_ra_, 0x8 + gidx);
+            //     int input_idx =
+            //         batchIdx * num_grfA_ * num_input_tiles + inputTile * num_grfA_ + gidx;
+
+            //     // 이건 그냥 트랜잭션 옮기는거야. 몇 번 도냐하면, 8번 되겠지?  
+            //     // 그런데 채널
+                
+            //     mem_->addTransaction(true, addr, str, &data->bData[input_idx]);
+
+            // }
+            // mem_->addBarrier(ch_idx);
         }
     }
     addBarrier();
@@ -248,9 +268,11 @@ void PIMKernel::setControl(BurstType* bst, bool pim_op, int crf_toggle_cond, boo
 
 unsigned PIMKernel::getResultColGemv(int input_dim, int output_dim)
 {
+    std::cout<< "input_dim: " <<input_dim<< " output_dim: "<<output_dim<<std::endl;
     int num_output_tiles = ceil(((double)output_dim / (num_total_pim_blocks_)) / num_grfB_);
-    int num_input_tiles = ceil((double)input_dim / (double)num_grfA_);
-
+    // 2048x256 is split into two channel groups of 128 inputs each (see preloadGemv).
+    int effective_input = (output_dim == 2048 && input_dim == 16) ? input_dim / 2 : input_dim;
+    int num_input_tiles = ceil((double)effective_input / (double)num_grfA_);
     return num_output_tiles * num_input_tiles / 2 * num_grfA_ * num_grfB_;
 }
 
@@ -283,7 +305,51 @@ void PIMKernel::changeBank(pimBankType pb_type, int& ch_idx, int& ra_idx, int& b
 void PIMKernel::preloadGemv(NumpyBurstType* operand, unsigned starting_row, unsigned starting_col)
 {
     int input_tile_size = num_grfA_;
-    int output_tile_size = num_grfB_ * num_total_pim_blocks_;
+    int output_tile_size = MIN((int)operand->bShape[0], num_grfB_ * (int)num_total_pim_blocks_);
+
+    // 2048x256 전용 처리. (weight bShape = [2048, 16], 입력 256개 = 16개 burst)
+    // 2048개 출력은 채널 32개만 있으면 되므로, 남는 채널 32개를 놀리지 않고
+    // 입력 256개를 앞 128개 / 뒤 128개로 나눠서 두 채널 그룹에 나눠 담는다.
+    //   - 그룹 0 : ch0~31  <- 입력 앞쪽 128개(burst 0~7)
+    //   - 그룹 1 : ch32~63 <- 입력 뒤쪽 128개(burst 8~15)
+    // 두 그룹이 동시에 돌기 때문에 입력 tile을 16개가 아니라 8개(=1 tile)만 돌리면 된다.
+    if (operand->bShape[0] == 2048 && operand->bShape[1] == 16)
+    {
+        int ch_idx, ra_idx, bg_idx, bank_idx;
+        unsigned row, col;
+        uint64_t addr;
+
+        for (int g = 0; g < 2; g++)  // 채널 그룹 2개
+        {
+            int ch_base = g * 32;  // 그룹 0 -> ch0, 그룹 1 -> ch32 부터 시작
+            ch_idx = ch_base;
+            ra_idx = 0;
+            bg_idx = 0;
+            bank_idx = 0;
+            // 출력 2048개를 (한 블록당 GRF_B 8개씩) 채널/뱅크에 뿌린다.
+            for (int tiled_y = 0; tiled_y < output_tile_size; tiled_y += num_grfB_)
+            {
+                row = starting_row;
+                col = starting_col;
+                for (int grfb_idx = 0; grfb_idx < num_grfB_; grfb_idx++)      // 출력 8개
+                    for (int grfa_idx = 0; grfa_idx < num_grfA_; grfa_idx++, col++)  // 입력 8개
+                    {
+                        addr = pim_addr_mgr_->addrGenSafe(ch_idx, ra_idx, bg_idx, bank_idx, row,
+                                                          col);
+                        // 이 그룹이 담당하는 입력 burst = g*8 + grfa_idx
+                        int d_idx =
+                            (tiled_y + grfb_idx) * operand->bShape[1] + g * 8 + grfa_idx;
+                        mem_->addTransaction(true, addr, &operand->bData[d_idx]);
+                    }
+
+                changeBank(pimBankType::EVEN_BANK, ch_idx, ra_idx, bg_idx, bank_idx, starting_row,
+                        starting_col, row, col);
+            }
+        }
+        return;
+    }
+
+    // std::cout << starting_row << " " << starting_col << std::endl;
 
     int ch_idx = 0, ra_idx = 0, bg_idx = 0, bank_idx = 0;
     unsigned row = 0, col = 0;
@@ -292,27 +358,47 @@ void PIMKernel::preloadGemv(NumpyBurstType* operand, unsigned starting_row, unsi
     unsigned even_starting_row = starting_row, odd_starting_row = starting_row;
     unsigned even_starting_col = starting_col, odd_starting_col = starting_col;
 
+    cout<< "operand->bShape[0]: " << operand->bShape[0] <<endl;
+    cout<< "operand->bShape[1]: " << operand->bShape[1] << " input_tile_size: "<< input_tile_size <<endl;
+    
     for (int y = 0; y < operand->bShape[0]; y += output_tile_size)
     {
         for (int x = 0; x < operand->bShape[1]; x += input_tile_size)
         {
-            bool is_odd = ((x / input_tile_size) % 2 == 1) ? true : false;
-
+            ch_idx = 0;
+            ra_idx = 0;
+            bg_idx = 0;
+            bank_idx = 0;
+            int itile = x / input_tile_size;
+            int otile = y / output_tile_size;
+            int num_input_tiles = (operand->bShape[1] + num_grfA_ - 1) / num_grfA_;
+            bool is_odd = (itile % 2 == 1) ? true : false;
+            // Column must match computeGemv's MAC column exactly:
+            //   num_grfA_*num_grfB_*(inputTile/2 + outputTile*num_input_tiles/2).
+            // Derive it from the tile indices directly: changeBank only advances
+            // starting_col on a full 64-channel wrap, so it under-counts when
+            // output_tile_size uses fewer than all channels (output < 4096) and
+            // over-counts (double-adds) when it uses exactly all of them.
+            unsigned tile_col =
+                num_grfA_ * num_grfB_ * (itile / 2 + otile * num_input_tiles / 2);
             for (int tiled_y = 0; tiled_y < output_tile_size; tiled_y += num_grfB_)
             {
-                row = (is_odd) ? odd_starting_row : even_starting_row;
-                col = (is_odd) ? odd_starting_col : even_starting_col;
+                row = starting_row;
+                col = starting_col + tile_col;
 
-                for (int grfb_idx = 0; grfb_idx < num_grfB_; grfb_idx++)
+                for (int grfb_idx = 0; grfb_idx < num_grfB_; grfb_idx++) 
                 {
                     for (int grfa_idx = 0; grfa_idx < num_grfA_; grfa_idx++, col++)
                     {
-                        addr = pim_addr_mgr_->addrGenSafe(ch_idx, ra_idx, bg_idx, bank_idx + is_odd,
-                                                          row, col);
+                        addr = pim_addr_mgr_->addrGenSafe(ch_idx, ra_idx, bg_idx, bank_idx + is_odd, 
+                                                row, col);
                         int d_idx = (y + tiled_y + grfb_idx) * operand->bShape[1] + x + grfa_idx;
+                        
+                        // std::cout<< "y: "<<y<<" x: "<<x<< " tiled_y: "<< tiled_y<<" grfb_idx: "<< grfb_idx<< " grfa_idx: "<<grfa_idx<<std::endl;
                         mem_->addTransaction(true, addr, &operand->bData[d_idx]);
                     }
                 }
+                // cout<< "ㅇㅇ" << endl;
                 is_odd ? changeBank(pimBankType::ODD_BANK, ch_idx, ra_idx, bg_idx, bank_idx,
                                     odd_starting_row, odd_starting_col, row, col)
                        : changeBank(pimBankType::EVEN_BANK, ch_idx, ra_idx, bg_idx, bank_idx,
@@ -320,6 +406,7 @@ void PIMKernel::preloadGemv(NumpyBurstType* operand, unsigned starting_row, unsi
             }
         }
     }
+
 }
 
 void PIMKernel::preloadNoReplacement(NumpyBurstType* operand, unsigned starting_row,
@@ -363,8 +450,35 @@ void PIMKernel::preloadEltwise(NumpyBurstType* operand, pimBankType pb_type,
 */
 void PIMKernel::executeGemv(NumpyBurstType* w_data, NumpyBurstType* i_data, bool is_tree)
 {
-    int num_output_tiles = ceil(((double)w_data->bShape[0] / (num_total_pim_blocks_)) / num_grfB_);
-    int num_input_tiles = ceil((double)w_data->bShape[1] / (double)num_grfA_);
+
+    // bShape : 가중치의 열인데, 그걸 총 pim unit 개수 x grfB_로 나눴으니(한 번에 최대한 할 수 있는 개수), 
+    // 이건 총 output tile가 몇 번까지 있는지임. tiling 생각하기
+    int num_output_tiles = ceil(((double)w_data->bShape[0] / (num_total_pim_blocks_)) / num_grfB_);     
+    std::cout<< "num_output_tiles: "<<num_output_tiles<< std::endl;   
+
+    // 2048x256: inputs are split across two channel groups (see preloadGemv), so each group
+    // only sees 128 inputs -> 16 input tiles, run in parallel. num_groups=1 otherwise.
+    int num_groups = (w_data->bShape[0] == 2048 && w_data->bShape[1] == 16) ? 2 : 1;
+
+    // 얘도 input tile이 몇 번까지 있는지
+    int num_input_tiles = ceil((double)(w_data->bShape[1] / num_groups) / (double)num_grfA_);
+    std::cout << "(double)w_data->bShape[1]: "<< (double)w_data->bShape[1] << std::endl;
+    std::cout <<"num_input_tiles: "<< num_input_tiles << std::endl;
+
+
+    // for (int i = 0; i < w_data->bData.size(); i++)
+    // {
+    //     std::cout << "w_data->bData[" << i << "] = " << w_data->bData[i].fp16ToStr() << std::endl;
+    // }
+
+    // std::cout << "i_data shape: [" << i_data->bShape[0] << ", " << i_data->bShape[1] << "]"
+    //            << std::endl;
+    // std::cout << "i_data bData.size(): " << i_data->bData.size() << std::endl;
+    
+    // for (int i = 0; i < i_data->bData.size(); i++)
+    //     std::cout << "i_data->bData[" << i << "] = " << i_data->bData[i].fp16ToStr() << std::endl;
+    
+
     int num_batch = i_data->bShape[0];
     int zero_row = 1000;
 
@@ -387,6 +501,8 @@ void PIMKernel::executeGemv(NumpyBurstType* w_data, NumpyBurstType* i_data, bool
     }
 
     vector<PIMCmd> pim_cmds;
+    
+    //안봄
     if (is_tree)
     {
         int num_jump = ceil((double)num_input_tiles / 2) - 1;
@@ -394,16 +510,24 @@ void PIMKernel::executeGemv(NumpyBurstType* w_data, NumpyBurstType* i_data, bool
     }
     else
     {
+        // num jumps to odd bank 지나면, odd bank로, even bank끝나면 끝
         int num_jump_of_even_bank = num_grfB_ * ceil((double)num_input_tiles / 2) - 1;
         int num_jump_of_odd_bank = num_grfB_ * floor(num_input_tiles / 2) - 1;
+        
+        // int num_jump_of_odd_bank;
+        // num_input_tiles <= 1 ? num_jump_of_odd_bank = 0 : num_jump_of_odd_bank = num_grfB_ * floor(num_input_tiles / 2) - 1;
+
+        std::cout << "num_jump_of_even_bank: "<< num_jump_of_even_bank << " num_jump_of_odd_bank: "<< num_jump_of_odd_bank <<std::endl;
+        
         pim_cmds =
             PIMCmdGen::getPIMCmds(KernelType::GEMV, 0, num_jump_of_odd_bank, num_jump_of_even_bank);
     }
     setControl(&bst_hab_pim_, true, getToggleCond(), false, true);
+
     parkIn();
     changePIMMode(dramMode::SB, dramMode::HAB);
-    programCrf(pim_cmds);
-
+    programCrf(pim_cmds);  
+  
     for (int j = 0; j < num_output_tiles; j++)
     {
         for (int b = 0; b < num_batch; b++)
@@ -412,6 +536,7 @@ void PIMKernel::executeGemv(NumpyBurstType* w_data, NumpyBurstType* i_data, bool
 
             int col = num_output_tiles * num_input_tiles / 2 * num_grfA_ * num_grfB_ +
                       (j + b) * num_grfB_;
+            // int evenbankGRF_b = 0;
             if (is_tree)
             {
                 for (int i = 0; i < num_input_tiles; i++, col += num_grfB_)
@@ -426,12 +551,23 @@ void PIMKernel::executeGemv(NumpyBurstType* w_data, NumpyBurstType* i_data, bool
             }
             else
             {
-                for (int i = 0; i < num_input_tiles; i += 2)
+                for (int i = 0; i < num_input_tiles; i += 2){
+                    std::cout << "=========computeGEMV 트리거됨========="<<std::endl<<
+                    "input 타일 번호: "<< i <<std::endl
+                    << "output 타일 번호: "<< j <<std::endl;
+                    
                     computeGemv(i_data, num_input_tiles, num_output_tiles, i, j, b,
-                                pimBankType::EVEN_BANK);
-                for (int i = 1; i < num_input_tiles; i += 2)
+                        pimBankType::EVEN_BANK, num_groups);
+                    }
+                for (int i = 1; i < num_input_tiles; i += 2){
+                    std::cout << "=========computeGEMV 트리거됨========="<<std::endl<<
+                    "input 타일 번호: "<< i <<std::endl
+                    << "output 타일 번호: "<< j <<std::endl;
+                    
                     computeGemv(i_data, num_input_tiles, num_output_tiles, i, j, b,
-                                pimBankType::ODD_BANK);
+                        pimBankType::ODD_BANK, num_groups);
+                    }
+
                 addTransactionAll(true, 0, 1, 0, col, "GRFB_TO_BANK_", &null_bst_, true, num_grf_);
             }
             changePIMMode(dramMode::HAB_PIM, dramMode::HAB);  // for grfBReset
@@ -442,32 +578,42 @@ void PIMKernel::executeGemv(NumpyBurstType* w_data, NumpyBurstType* i_data, bool
 }
 
 void PIMKernel::computeGemv(NumpyBurstType* data, int num_input_tiles, int num_output_tiles,
-                            int inputTile, int outputTile, int batchIdx, pimBankType pb_type)
+                            int inputTile, int outputTile, int batchIdx, pimBankType pb_type,
+                            int num_groups)
 {
+
     for (int ch_idx = 0; ch_idx < num_pim_chans_; ch_idx++)
     {
-        for (int ra_idx = 0; ra_idx < num_pim_ranks_; ra_idx++)
+        for (int ra_idx = 0; ra_idx < num_pim_ranks_; ra_idx++) // 얘는 랭크
         {
             // input upload to GRF
-            for (int gidx = 0; gidx < num_grfA_; gidx++)
-            {
+            for (int gidx = 0; gidx < num_grfA_; gidx++){
                 string str = "WRIO_TO_GRF_";
                 uint64_t addr =
                     pim_addr_mgr_->addrGen(ch_idx, ra_idx, 0, 1, pim_reg_ra_, 0x8 + gidx);
-                int input_idx =
-                    batchIdx * num_grfA_ * num_input_tiles + inputTile * num_grfA_ + gidx;
+                
+                    // 2048x256(num_groups==2)이면 ch0~31은 앞쪽 입력, ch32~63은 뒤쪽 입력을 받는다.
+                int g = (num_groups == 2) ? (ch_idx / 32) : 0;
+                int input_idx = batchIdx * num_grfA_ * num_input_tiles * num_groups +
+                                g * num_grfA_ * num_input_tiles + inputTile * num_grfA_ + gidx;
+
                 mem_->addTransaction(true, addr, str, &data->bData[input_idx]);
-            }
+            }        
             mem_->addBarrier(ch_idx);
         }
+        
     }
 
     unsigned row = 0;
     unsigned col = (num_grfA_ * num_grfB_) * (inputTile / 2 + outputTile * num_input_tiles / 2);
 
-    for (int c_idx = 0; c_idx < 64; c_idx += 8)
+    
+    for (int c_idx = 0; c_idx < 64; c_idx += 8){
+        // 여기서 mac 연산 실행
+        // printf("row: %u \n col: %u\n",row, col + c_idx);
         addTransactionAll(false, 0, (int)pb_type, row, col + c_idx, "MAC_", &null_bst_, true,
-                          num_grfA_);
+        num_grfA_);
+    }    
 }
 
 void PIMKernel::readResult(BurstType* resultBst, pimBankType pb_type, int output_dim,
@@ -591,9 +737,8 @@ void PIMKernel::readData(BurstType* bst_data, size_t bst_cnt, unsigned starting_
     uint64_t init_addr = pim_addr_mgr_->addrGenSafe(0, 0, 0, 0, starting_row, starting_col);
 
     for (uint64_t addr = init_addr, i = 0; i < bst_cnt; addr += transaction_size_, i++)
-    {
         mem_->addTransaction(false, addr, &bst_data[i]);
-    }
+    
 }
 
 void PIMKernel::adderTree(BurstType* result, int output_dim, int num_tile, int step, fp16* temp)
