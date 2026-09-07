@@ -5,7 +5,7 @@ import numpy as np
 BATCH = 1
 REAL_DIM_IN = 1024
 DIM_IN = 1024
-DIM_OUT = 4096
+DIM_OUT = 2048
 
 np.set_printoptions(precision=20)
 np.random.seed(1113)
